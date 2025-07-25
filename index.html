@@ -193,7 +193,7 @@
                 <button id="closeModal" class="text-gray-400 hover:text-white text-3xl leading-none">&times;</button>
             </div>
             <div class="video-container m-2 sm:m-4">
-                <video id="videoPlayer" controls autoplay></video>
+                <video id="videoPlayer" controls></video>
             </div>
         </div>
     </div>
@@ -294,12 +294,11 @@
             const mobileNav = document.getElementById('mobileNav');
             const toastEl = document.getElementById('toast');
             
-            let hls = new Hls();
+            let hls = null;
             let toastTimeout;
 
             // --- FUNCTIONS ---
 
-            // Function to show a custom toast notification
             function showToast(message) {
                 clearTimeout(toastTimeout);
                 toastEl.textContent = message;
@@ -309,9 +308,8 @@
                 }, 3000);
             }
 
-            // Function to render match cards
             function renderMatches() {
-                matchListEl.innerHTML = ''; // Clear existing list
+                matchListEl.innerHTML = '';
                 matches.forEach(match => {
                     const card = document.createElement('div');
                     card.className = 'card-bg rounded-lg overflow-hidden transform transition duration-300';
@@ -338,11 +336,10 @@
                         ${match.status !== 'Live' ? '<div class="p-4 text-center bg-gray-800 text-gray-400 font-semibold">Coming Soon</div>' : ''}
                     `;
                     matchListEl.appendChild(card);
-                }); // end forEach
-            } // end renderMatches
+                });
+            }
             
-            // Function to play video
-            function playVideo(src, title) {
+            async function playVideo(src, title) {
                 if (!src || src === '#') {
                     showToast('This match is not live yet.');
                     return;
@@ -352,45 +349,86 @@
                 videoModal.classList.add('active');
                 videoModalBackdrop.classList.add('active');
                 
+                if (hls) {
+                    hls.destroy();
+                }
+
+                hls = new Hls({
+                    debug: true // Enable debugging to see detailed logs
+                });
+
                 if (Hls.isSupported()) {
                     hls.loadSource(src);
                     hls.attachMedia(videoPlayer);
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play());
+
+                    hls.on(Hls.Events.MANIFEST_PARSED, async () => {
+                        try {
+                            await videoPlayer.play();
+                        } catch (error) {
+                            console.error("Playback error:", error);
+                            if (error.name === 'AbortError') {
+                                console.log('Playback was interrupted, this is often normal when switching streams.');
+                            } else {
+                                showToast('Could not start video playback.');
+                            }
+                        }
+                    });
+                    
+                    hls.on(Hls.Events.ERROR, function (event, data) {
+                        console.error('HLS.js error:', data);
+                        if (data.fatal) {
+                            switch (data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    console.error('Fatal network error encountered, trying to recover...');
+                                    showToast('Network error. Check connection.');
+                                    hls.startLoad();
+                                    break;
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    console.error('Fatal media error encountered, trying to recover...');
+                                    showToast('Media error. Cannot play stream.');
+                                    hls.recoverMediaError();
+                                    break;
+                                default:
+                                    showToast('An unrecoverable error occurred.');
+                                    hls.destroy();
+                                    break;
+                            }
+                        }
+                    });
+
                 } else if (videoPlayer.canPlayType('application/vnd.apple.mpegurl')) {
                     videoPlayer.src = src;
-                    videoPlayer.addEventListener('loadedmetadata', () => videoPlayer.play());
+                    try {
+                        await videoPlayer.play();
+                    } catch(error) {
+                        console.error("Native HLS playback error:", error);
+                        showToast('Could not start video playback.');
+                    }
                 }
-            } // end playVideo
+            }
 
-            // Function to stop video and close modal
             function stopVideo() {
-                hls.stopLoad();
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
+                }
                 videoPlayer.pause();
-                videoPlayer.src = "";
+                videoPlayer.removeAttribute('src'); // Use removeAttribute for cleaner state
+                videoPlayer.load(); // Reset the media element
                 videoModal.classList.remove('active');
                 videoModalBackdrop.classList.remove('active');
-            } // end stopVideo
+            }
 
-            // Toggle mobile navigation
             function toggleMobileNav() {
                 mobileNav.classList.toggle('open');
                 const icon = mobileMenuBtn.querySelector('i');
-                if (mobileNav.classList.contains('open')) {
-                    icon.className = 'ph ph-x text-3xl';
-                } else {
-                    icon.className = 'ph ph-list text-3xl';
-                }
-            } // end toggleMobileNav
+                icon.className = mobileNav.classList.contains('open') ? 'ph ph-x text-3xl' : 'ph ph-list text-3xl';
+            }
             
-            // --- EVENT LISTENERS ---
-            
-            // Use event delegation for play buttons
             document.body.addEventListener('click', (e) => {
                 const button = e.target.closest('.play-video-btn');
                 if (button) {
-                    const src = button.dataset.videoSrc;
-                    const title = button.dataset.videoTitle;
-                    playVideo(src, title);
+                    playVideo(button.dataset.videoSrc, button.dataset.videoTitle);
                 }
             });
 
@@ -398,7 +436,6 @@
             videoModalBackdrop.addEventListener('click', stopVideo);
             mobileMenuBtn.addEventListener('click', toggleMobileNav);
 
-            // --- INITIALIZATION ---
             renderMatches();
         });
     </script>
